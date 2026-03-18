@@ -131,16 +131,52 @@ void saveCalibration()
   prefs.end();
 }
 
-// ---------- TELEMETRY RECEIVE ----------
+// ---------- UNIFIED RECEIVE ----------
 void onReceive(const uint8_t *mac, const uint8_t *data, int len)
 {
-  if (len != sizeof(TelemetryPacket))
+  // ---------- PAIR RESPONSE ----------
+  if (len == sizeof(PairPacket))
+  {
+    if (mode != MODE_PAIRING)
+      return;
+
+    PairPacket pkt;
+    memcpy(&pkt, data, sizeof(pkt));
+
+    if (pkt.magic == PAIR_MAGIC && pkt.type == PACKET_PAIR_OK)
+    {
+      memcpy(receiverAddress, mac, 6);
+      saveReceiver(receiverAddress);
+
+      blink(255, 0, 0, 3, 200);
+
+      // Add peer immediately
+      esp_now_peer_info_t peerInfo = {};
+      memcpy(peerInfo.peer_addr, receiverAddress, 6);
+      peerInfo.channel = ESPNOW_CHANNEL;
+      peerInfo.encrypt = false;
+      esp_now_add_peer(&peerInfo);
+
+      mode = MODE_NORMAL;
+    }
+
     return;
+  }
 
-  TelemetryPacket packet;
-  memcpy(&packet, data, sizeof(packet));
+  // ---------- TELEMETRY ----------
+  if (len == sizeof(TelemetryPacket) && paired)
+  {
 
-  skateBattery = packet.skateBat / 100.0;
+    if (memcmp(mac, receiverAddress, 6) != 0)
+      return;
+
+    TelemetryPacket packet;
+    memcpy(&packet, data, sizeof(packet));
+
+    skateBattery = packet.skateBat / 100.0;
+
+    return;
+  }
 }
 
 // ---------- SAVE/LOAD RECEIVER ----------
@@ -166,27 +202,6 @@ bool loadReceiver()
   return false;
 }
 
-// ---------- RECEIVE PAIR RESPONSE ----------
-void onReceivePair(const uint8_t *mac, const uint8_t *data, int len)
-{
-  if (len != sizeof(PairPacket))
-    return;
-
-  PairPacket pkt;
-  memcpy(&pkt, data, sizeof(pkt));
-
-  if (pkt.magic != PAIR_MAGIC)
-    return;
-
-  if (pkt.type == PACKET_PAIR_OK)
-  {
-    memcpy(receiverAddress, mac, 6);
-    saveReceiver(receiverAddress);
-    blink(255, 0, 0, 3, 200);
-    mode = MODE_NORMAL;
-  }
-}
-
 // ---------- RADIO ----------
 void setupRadio()
 {
@@ -203,7 +218,7 @@ void setupRadio()
   {
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, receiverAddress, 6);
-    peerInfo.channel = 0;
+    peerInfo.channel = ESPNOW_CHANNEL;
     peerInfo.encrypt = false;
     esp_now_add_peer(&peerInfo);
   }
@@ -330,6 +345,7 @@ void sendPairRequest()
   PairPacket pkt;
   pkt.magic = PAIR_MAGIC;
   pkt.type = PACKET_PAIR_REQUEST;
+
   uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
   esp_now_send(broadcastAddress, (uint8_t *)&pkt, sizeof(pkt));
 }
@@ -338,15 +354,16 @@ void sendPairRequest()
 void pairingMode()
 {
   setAll(255, 0, 255);
-  esp_now_register_recv_cb(onReceivePair);
+
   while (mode == MODE_PAIRING)
   {
     unsigned long now = millis();
 
     if (now - lastPairSend > SEND_INTERVAL_MS)
+    {
       sendPairRequest();
-
-    lastPairSend = now;
+      lastPairSend = now;
+    }
   }
 }
 
@@ -372,25 +389,30 @@ void checkBootModes()
     if (mode == MODE_NORMAL)
     {
       if (throttle > BOOT_THROTTLE_HIGH)
+      {
         mode = MODE_CALIBRATION;
-      setAll(0, 0, 255); // blue
+        setAll(0, 0, 255);
+      }
 
       if (throttle < BOOT_THROTTLE_LOW)
+      {
         mode = MODE_PAIRING;
-      setAll(255, 0, 255); // purple
+        setAll(255, 0, 255);
+      }
     }
 
     delay(50);
   }
 
-  setAll(255, 255, 255); // white
+  setAll(255, 255, 255);
   start = millis();
+
   while (digitalRead(DEADMAN_PIN))
   {
     if (millis() - start > MODE_CONFIRM_TIME_MS)
     {
       mode = MODE_NORMAL;
-      setAll(0, 0, 0); // black
+      setAll(0, 0, 0);
       return;
     }
     delay(50);
@@ -417,7 +439,6 @@ void setup()
   leds.show();
 
   loadReceiver();
-
   loadCalibration();
 
   checkBootModes();

@@ -101,52 +101,51 @@ void enableControlMode()
 
     esp_now_add_peer(&peer);
 
-    esp_now_register_recv_cb(onReceiveControl);
-
     Serial.println("Control mode active");
 }
 
-// ---------- PAIR CALLBACK ----------
-void onReceivePair(const uint8_t *mac, const uint8_t *data, int len)
+// ---------- UNIFIED RECEIVE CALLBACK ----------
+void onReceive(const uint8_t *mac, const uint8_t *data, int len)
 {
-    if (len != sizeof(PairPacket))
-        return;
-
-    PairPacket pkt;
-    memcpy(&pkt, data, sizeof(pkt));
-
-    if (pkt.magic != PAIR_MAGIC)
-        return;
-
-    if (pkt.type == PACKET_PAIR_REQUEST)
+    // ---------- PAIR ----------
+    if (len == sizeof(PairPacket) && !controlMode)
     {
-        memcpy(remoteAddress, mac, 6);
 
-        saveRemote(remoteAddress);
-        paired = true;
+        PairPacket pkt;
+        memcpy(&pkt, data, sizeof(pkt));
 
-        sendPairOK(remoteAddress);
+        if (pkt.magic == PAIR_MAGIC && pkt.type == PACKET_PAIR_REQUEST)
+        {
+            memcpy(remoteAddress, mac, 6);
 
-        Serial.println("Remote paired");
+            saveRemote(remoteAddress);
+            paired = true;
 
-        enableControlMode();
+            sendPairOK(remoteAddress);
+
+            Serial.println("Remote paired");
+
+            enableControlMode();
+        }
+
+        return;
     }
-}
 
-// ---------- CONTROL CALLBACK ----------
-void onReceiveControl(const uint8_t *mac, const uint8_t *data, int len)
-{
-    if (len != sizeof(ControlPacket))
+    // ---------- CONTROL ----------
+    if (len == sizeof(ControlPacket) && controlMode)
+    {
+
+        if (memcmp(mac, remoteAddress, 6) != 0)
+            return;
+
+        ControlPacket packet;
+        memcpy(&packet, data, sizeof(packet));
+
+        throttle = constrain(packet.throttle, THROTTLE_MIN, THROTTLE_MAX);
+        lastPacketTime = millis();
+
         return;
-
-    if (memcmp(mac, remoteAddress, 6) != 0)
-        return;
-
-    ControlPacket packet;
-    memcpy(&packet, data, sizeof(packet));
-
-    throttle = packet.throttle;
-    lastPacketTime = millis();
+    }
 }
 
 // ---------- RADIO SETUP ----------
@@ -161,7 +160,8 @@ void setupRadio()
         return;
     }
 
-    esp_now_register_recv_cb(onReceivePair);
+    esp_now_register_recv_cb(onReceive);
+
     Serial.println("Pair window open...");
 
     unsigned long start = millis();
@@ -182,7 +182,7 @@ void setupPPM()
 // ---------- SEND TELEMETRY ----------
 void sendTelemetry()
 {
-    if (!paired)
+    if (!controlMode)
         return;
 
     static unsigned long lastSend = 0;

@@ -15,6 +15,33 @@ This firmware implements an ESP-NOW based wireless remote for an electric skateb
 
 ---
 
+## Hardware
+
+The system consists of two devices:
+
+- **Remote** – handheld controller with throttle input, battery monitoring, and LED indicators.
+- **Receiver** – mounted on the skateboard and outputs a **PPM signal** to the ESC/VESC.
+
+Both devices communicate wirelessly using **ESP-NOW**.
+
+---
+
+## Required Components
+
+- **2× ESP32-C3 SuperMini** microcontrollers (remote + receiver)
+- **49E Hall effect sensor** (throttle position sensing)
+- **2× 5 mm neodymium magnets** (for hall throttle mechanism)
+- **Pen spring** (for throttle return mechanism)
+- **TP4056 charging module** (Li-ion charging and protection)
+- **18650 Li-ion battery**
+- **10T85 limit switch** (deadman switch)
+- **8-LED WS2812 / NeoPixel module** (status and battery indicators)
+- **KCD11 power switch**
+- **Resistors for battery voltage divider**
+- **4× M3 × 15 mm button head screws**
+
+---
+
 ## Boot Modes
 
 Hold the deadman switch and **throttle fully forward or backward** during power-on for to enter special modes. LEDs will light up to indicate which mode it's entering:
@@ -41,8 +68,6 @@ Calibration allows adjusting throttle min, max, and center for better precision.
 2. **Green fast blink** indicates calibration complete.
 3. Firmware saves the calibration to non-volatile memory.
 
-> Use calibration if your throttle range feels off or sticks.
-
 ---
 
 ### 2. Pairing Mode
@@ -57,8 +82,6 @@ Pairing binds the remote to a new receiver.
 4. Once paired, the remote enters **Normal Mode** automatically.
 5. Remote stays in pairing mode until either successfully paired or powered off.
 
-> **Important:** Pairing is permanent until a new pairing sequence.
-
 ---
 
 ## LED Battery Indicators
@@ -69,5 +92,3 @@ Pairing binds the remote to a new receiver.
 - **Remote Battery (LED 6)**
     - Red blinking if below `REMOTE_CRITICAL_V`
     - Gradient from Red → Green indicates charge
-
-> LED 5 and 7 are currently unused.
