@@ -21,6 +21,7 @@ Adafruit_NeoPixel leds(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 #define SEND_INTERVAL_MS 20
 #define MODE_HOLD_TIME_MS 5000
 #define MODE_CONFIRM_TIME_MS 1500
+#define RADIO_TIMEOUT_MS 200
 
 // ---------- ADC ----------
 #define ADC_REF_VOLTAGE 3.3
@@ -39,27 +40,13 @@ Adafruit_NeoPixel leds(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 #define DEFAULT_THROTTLE_CENTER 2000
 #define DEFAULT_THROTTLE_MAX 3000
 
-// ---------- BOOT THRESHOLDS ----------
-#define BOOT_THROTTLE_HIGH 900
-#define BOOT_THROTTLE_LOW -900
-
 #define ESPNOW_CHANNEL 1
-
-// ---------- MODES ----------
-enum Mode
-{
-  MODE_NORMAL,
-  MODE_CALIBRATION,
-  MODE_PAIRING
-};
-Mode mode = MODE_NORMAL;
 
 // ---------- STATE ----------
 unsigned long lastSend = 0;
-unsigned long lastPairSend = 0;
 float skateBattery = 0;
-uint8_t receiverAddress[6];
-bool paired = false;
+uint8_t receiverAddress[] = {0xE0, 0x72, 0xA1, 0x68, 0xCF, 0x2C};
+unsigned long lastPacketTime = 0;
 
 // ---------- STORAGE ----------
 Preferences prefs;
@@ -94,8 +81,7 @@ float readRemoteBattery()
 {
   int raw = analogRead(REMOTE_BAT_PIN);
 
-  float voltage = raw * ADC_REF_VOLTAGE / ADC_MAX;
-  voltage *= REMOTE_DIVIDER_RATIO;
+  float voltage = (raw / ADC_MAX) * ADC_REF_VOLTAGE * REMOTE_DIVIDER_RATIO;
 
   return voltage;
 }
@@ -103,7 +89,7 @@ float readRemoteBattery()
 // ---------- LOAD CALIBRATION ----------
 void loadCalibration()
 {
-  prefs.begin("throttle", true);
+  prefs.begin("throttle", false);
 
   throttleMin = prefs.getInt("min", DEFAULT_THROTTLE_MIN);
   throttleMax = prefs.getInt("max", DEFAULT_THROTTLE_MAX);
@@ -134,102 +120,60 @@ void saveCalibration()
 // ---------- UNIFIED RECEIVE ----------
 void onReceive(const uint8_t *mac, const uint8_t *data, int len)
 {
-  // ---------- PAIR RESPONSE ----------
-  if (len == sizeof(PairPacket))
-  {
-    if (mode != MODE_PAIRING)
-      return;
-
-    PairPacket pkt;
-    memcpy(&pkt, data, sizeof(pkt));
-
-    if (pkt.magic == PAIR_MAGIC && pkt.type == PACKET_PAIR_OK)
-    {
-      memcpy(receiverAddress, mac, 6);
-      saveReceiver(receiverAddress);
-
-      blink(255, 0, 0, 3, 200);
-
-      // Add peer immediately
-      esp_now_peer_info_t peerInfo = {};
-      memcpy(peerInfo.peer_addr, receiverAddress, 6);
-      peerInfo.channel = ESPNOW_CHANNEL;
-      peerInfo.encrypt = false;
-      esp_now_add_peer(&peerInfo);
-
-      mode = MODE_NORMAL;
-    }
-
-    return;
-  }
-
-  // ---------- TELEMETRY ----------
-  if (len == sizeof(TelemetryPacket) && paired)
+  Serial.print("Received packet");
+  if (len == sizeof(TelemetryPacket))
   {
 
-    if (memcmp(mac, receiverAddress, 6) != 0)
-      return;
+    // if (memcmp(mac, receiverAddress, 6) != 0)
+    //   return;
 
     TelemetryPacket packet;
     memcpy(&packet, data, sizeof(packet));
 
     skateBattery = packet.skateBat / 100.0;
+    lastPacketTime = millis();
 
     return;
   }
 }
 
-// ---------- SAVE/LOAD RECEIVER ----------
-void saveReceiver(uint8_t *mac)
-{
-  prefs.begin("pair", false);
-  prefs.putBytes("receiver", mac, 6);
-  prefs.end();
-  paired = true;
-}
-
-bool loadReceiver()
-{
-  prefs.begin("pair", true);
-  if (prefs.isKey("receiver"))
-  {
-    prefs.getBytes("receiver", receiverAddress, 6);
-    prefs.end();
-    paired = true;
-    return true;
-  }
-  prefs.end();
-  return false;
-}
-
 // ---------- RADIO ----------
+
 void setupRadio()
 {
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);
+  // This forces the ESP32 to stay on Channel 1
   esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
 
   if (esp_now_init() != ESP_OK)
   {
-    Serial.println("ESP-NOW init failed");
+    Serial.println("Error initializing ESP-NOW");
     return;
   }
 
-  if (paired)
+  // Register the Receiver as a peer
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, receiverAddress, 6);
+  peerInfo.channel = ESPNOW_CHANNEL;
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK)
   {
-    esp_now_peer_info_t peerInfo = {};
-    memcpy(peerInfo.peer_addr, receiverAddress, 6);
-    peerInfo.channel = ESPNOW_CHANNEL;
-    peerInfo.encrypt = false;
-    esp_now_add_peer(&peerInfo);
+    Serial.println("Failed to add peer");
+    return;
   }
 
   esp_now_register_recv_cb(onReceive);
+
+  Serial.println("Remote Radio Ready - Linked to Receiver");
 }
 
 // ---------- THROTTLE ----------
 int16_t readThrottle()
 {
   int raw = analogRead(THROTTLE_PIN);
+
   raw = constrain(raw, throttleMin, throttleMax);
 
   if (raw > throttleCenter)
@@ -249,29 +193,51 @@ void sendControl()
   lastSend = now;
 
   ControlPacket packet;
-  packet.throttle = digitalRead(DEADMAN_PIN) ? readThrottle() : 0;
+  packet.throttle = !digitalRead(DEADMAN_PIN) ? readThrottle() : 0;
   esp_now_send(receiverAddress, (uint8_t *)&packet, sizeof(packet));
 }
 
 // ---------- SKATE BATTERY DISPLAY ----------
 void drawSkateBattery()
 {
-  float percent = (skateBattery - SKATE_MIN_V) / (SKATE_MAX_V - SKATE_MIN_V);
-  percent = constrain(percent, 0.0, 1.0);
-
-  int ledsOn = round(percent * 5);
-
-  for (int i = 0; i < 5; i++)
+  if (millis() - lastPacketTime <= RADIO_TIMEOUT_MS)
   {
-    if (i < ledsOn)
-    {
-      uint8_t r = 255 * (1 - percent);
-      uint8_t g = 255 * percent;
+    float percent = (skateBattery - SKATE_MIN_V) / (SKATE_MAX_V - SKATE_MIN_V);
+    percent = constrain(percent, 0.0, 1.0);
 
-      leds.setPixelColor(i, leds.Color(r, g, 0));
+    // Using 5.0 for float math accuracy
+    int ledsOn = round(percent * 5.0);
+
+    for (int i = 0; i < 5; i++)
+    {
+      if (i < ledsOn)
+      {
+        // Calculate Red/Green mix based on battery level
+        // Dividing by 10 to keep brightness manageable (e.g., 25 max)
+        uint8_t r = (255 * (1.0 - percent)) / 10;
+        uint8_t g = (255 * percent) / 10;
+
+        leds.setPixelColor(i, leds.Color(r, g, 0));
+      }
+      else
+      {
+        leds.setPixelColor(i, 0); // Turn off unused battery LEDs
+      }
     }
-    else
+  }
+  else
+  {
+    // SIGNAL LOST: Clear these specific LEDs (0-4)
+    for (int i = 0; i < 5; i++)
+    {
       leds.setPixelColor(i, 0);
+    }
+
+    // Blink LED 0 Red to show "Disconnected"
+    if ((millis() / 500) % 2)
+    {
+      leds.setPixelColor(0, leds.Color(10, 0, 0));
+    }
   }
 }
 
@@ -302,8 +268,8 @@ void drawRemoteBattery()
   float percent = (v - REMOTE_MIN_V) / (REMOTE_MAX_V - REMOTE_MIN_V);
   percent = constrain(percent, 0.0, 1.0);
 
-  uint8_t r = 255 * (1 - percent);
-  uint8_t g = 255 * percent;
+  uint8_t r = 10 * (1 - percent);
+  uint8_t g = 10 * percent;
 
   leds.setPixelColor(6, leds.Color(r, g, 0));
 }
@@ -319,110 +285,224 @@ void updateBatteryDisplay()
 // ---------- CALIBRATION ----------
 void calibrateThrottle()
 {
-  setAll(0, 0, 0);
-  delay(2000);
 
-  setAll(255, 0, 0);
-  delay(3000);
-  throttleMin = analogRead(THROTTLE_PIN);
-
-  setAll(0, 255, 0);
-  delay(3000);
-  throttleMax = analogRead(THROTTLE_PIN);
-
-  setAll(255, 255, 0);
-  delay(3000);
-  throttleCenter = analogRead(THROTTLE_PIN);
-
-  saveCalibration();
-
-  blink(0, 255, 0, 5, 200);
-}
-
-// ---------- SEND PAIR REQUEST ----------
-void sendPairRequest()
-{
-  PairPacket pkt;
-  pkt.magic = PAIR_MAGIC;
-  pkt.type = PACKET_PAIR_REQUEST;
-
-  uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-  esp_now_send(broadcastAddress, (uint8_t *)&pkt, sizeof(pkt));
-}
-
-// ---------- PAIRING ----------
-void pairingMode()
-{
-  setAll(255, 0, 255);
-
-  while (mode == MODE_PAIRING)
-  {
-    unsigned long now = millis();
-
-    if (now - lastPairSend > SEND_INTERVAL_MS)
-    {
-      sendPairRequest();
-      lastPairSend = now;
-    }
-  }
-}
-
-// ---------- BOOT MODE CHECK ----------
-void checkBootModes()
-{
-  delay(500);
-  if (!digitalRead(DEADMAN_PIN))
-    return;
+  int minVal = 4095;
+  int maxVal = 0;
 
   unsigned long start = millis();
 
-  while (millis() - start < MODE_HOLD_TIME_MS)
+  // --- SAMPLE FOR 8 SECONDS ---
+  while (millis() - start < 8000)
   {
-    int16_t throttle = readThrottle();
+    // --- PING-PONG ANIMATION ---
+    int activeLed = abs(((int)(millis() / 150) % 8) - 4);
 
-    if (!digitalRead(DEADMAN_PIN) || (throttle < BOOT_THROTTLE_HIGH && throttle > BOOT_THROTTLE_LOW))
+    for (int i = 0; i < 5; i++)
     {
-      mode = MODE_NORMAL;
+      leds.setPixelColor(i, (i == activeLed) ? leds.Color(0, 0, 100) : 0);
+    }
+    leds.show();
+
+    // --- SAMPLING ---
+    int v = analogRead(THROTTLE_PIN);
+    if (v < minVal)
+      minVal = v;
+    if (v > maxVal)
+      maxVal = v;
+
+    delay(5);
+  }
+
+  // --- WAIT FOR RELEASE (CENTER) ---
+
+  int last = analogRead(THROTTLE_PIN);
+  unsigned long stableStart = millis();
+
+  while (true)
+  {
+    // --- ANIMATION: Meet at Center (0,1,2 and 4,3,2) ---
+    int step = (millis() / 200) % 3; // 0, 1, 2... repeat
+
+    for (int i = 0; i < 5; i++)
+    {
+      // Light up i if it matches the current step OR the mirrored step
+      bool isMatch = (i == step || i == (4 - step));
+      leds.setPixelColor(i, isMatch ? leds.Color(10, 10, 0) : 0);
+    }
+    leds.show();
+
+    // --- STABILITY CHECK ---
+    int v = analogRead(THROTTLE_PIN);
+    if (abs(v - last) > 10)
+    {
+      stableStart = millis();
+      last = v;
+    }
+
+    if (millis() - stableStart > 1000)
+    {
+      throttleCenter = v;
+      break;
+    }
+    delay(10);
+  }
+
+  // throttleMin = minVal;
+  // throttleMax = maxVal;
+
+  // Pull the Max down by 10% of the upper travel
+  throttleMax = throttleCenter + (int)((maxVal - throttleCenter) * 0.9);
+
+  // Pull the Min up by 10% of the lower travel
+  throttleMin = throttleCenter - (int)((throttleCenter - minVal) * 0.9);
+
+  // --- VALIDATION ---
+  if (throttleMin >= throttleCenter || throttleCenter >= throttleMax)
+  {
+    blink(10, 0, 0, 5, 200); // error
+    return;
+  }
+
+  if ((throttleMax - throttleMin) < 300)
+  {
+    blink(10, 0, 0, 5, 200); // error
+    return;
+  }
+
+  saveCalibration();
+
+  blink(0, 10, 0, 5, 200); // success
+}
+
+// ---------- BOOT MODE CHECK ----------
+void checkBootMode()
+{
+  // 1. Initial Check: Must start with deadman pressed (LOW)
+  if (digitalRead(DEADMAN_PIN))
+    return;
+
+  // --- STEP 1: Progress Bar Hold (8s - WHITE) ---
+  unsigned long start = millis();
+  while (millis() - start < 8000)
+  {
+    if (digitalRead(DEADMAN_PIN))
+    {
+      leds.clear();
+      leds.show();
       return;
     }
 
-    if (mode == MODE_NORMAL)
+    // Map 8 seconds across only 5 LEDs (0-4)
+    int progress = map(millis() - start, 0, 8000, 0, 5);
+    for (int i = 0; i < 5; i++)
     {
-      if (throttle > BOOT_THROTTLE_HIGH)
-      {
-        mode = MODE_CALIBRATION;
-        setAll(0, 0, 255);
-      }
-
-      if (throttle < BOOT_THROTTLE_LOW)
-      {
-        mode = MODE_PAIRING;
-        setAll(255, 0, 255);
-      }
+      leds.setPixelColor(4 - i, (i < progress) ? leds.Color(15, 15, 15) : 0);
     }
-
-    delay(50);
+    leds.show();
+    delay(20);
   }
 
-  setAll(255, 255, 255);
+  // --- STEP 2: Pulsing RED 1s (must RELEASE) ---
   start = millis();
-
-  while (digitalRead(DEADMAN_PIN))
+  bool released = false;
+  while (millis() - start < 1000)
   {
-    if (millis() - start > MODE_CONFIRM_TIME_MS)
+    // Simple sine wave for pulsing brightness (0-20)
+    int pulse = 10 + sin(millis() / 100.0) * 10;
+    for (int i = 0; i < 5; i++)
+      leds.setPixelColor(i, leds.Color(pulse, 0, 0));
+    leds.show();
+
+    if (digitalRead(DEADMAN_PIN))
     {
-      mode = MODE_NORMAL;
-      setAll(0, 0, 0);
-      return;
+      released = true;
+      break;
     }
-    delay(50);
+    delay(10);
+  }
+  if (!released)
+  {
+    leds.clear();
+    leds.show();
+    return;
   }
 
-  if (mode == MODE_CALIBRATION)
-    calibrateThrottle();
+  // --- STEP 3: Wait Period (3s - OFF) ---
+  leds.clear();
+  leds.show();
+  start = millis();
+  while (millis() - start < 3000)
+  {
+    if (!digitalRead(DEADMAN_PIN))
+      return; // Pressed too early -> cancel
+    delay(10);
+  }
 
-  if (mode == MODE_PAIRING)
-    pairingMode();
+  // --- STEP 4: Pulsing WHITE 1s (must PRESS) ---
+  start = millis();
+  bool pressed = false;
+  while (millis() - start < 1000)
+  {
+    int pulse = 10 + sin(millis() / 100.0) * 10;
+    for (int i = 0; i < 5; i++)
+      leds.setPixelColor(i, leds.Color(pulse, pulse, pulse));
+    leds.show();
+
+    if (!digitalRead(DEADMAN_PIN))
+    {
+      pressed = true;
+      break;
+    }
+    delay(10);
+  }
+  if (!pressed)
+  {
+    leds.clear();
+    leds.show();
+    return;
+  }
+
+  // --- STEP 5: Final Confirmation (GREEN) ---
+  // If we got here, we are entering calibration
+  for (int i = 0; i < 5; i++)
+    leds.setPixelColor(i, leds.Color(0, 10, 0));
+  leds.show();
+  delay(1000);
+
+  calibrateThrottle();
+}
+
+void debugPrint()
+{
+  static unsigned long lastDebug = 0;
+  unsigned long now = millis();
+
+  if (now - lastDebug < 200)
+    return;
+
+  lastDebug = now;
+
+  int rawThrottle = analogRead(THROTTLE_PIN);
+  int16_t mappedThrottle = readThrottle();
+  bool deadman = digitalRead(DEADMAN_PIN);
+  float remoteBat = readRemoteBattery();
+
+  Serial.print("RAW: ");
+  Serial.print(rawThrottle);
+
+  Serial.print(" | THR: ");
+  Serial.print(mappedThrottle);
+
+  Serial.print(" | DEADMAN: ");
+  Serial.print(deadman);
+
+  Serial.print(" | REMOTE V: ");
+  Serial.print(remoteBat, 2);
+
+  Serial.print(" | SKATE V: ");
+  Serial.print(skateBattery, 2);
+
+  Serial.println();
 }
 
 // ---------- SETUP ----------
@@ -438,11 +518,8 @@ void setup()
   leds.clear();
   leds.show();
 
-  loadReceiver();
+  checkBootMode();
   loadCalibration();
-
-  checkBootModes();
-
   setupRadio();
 }
 
@@ -451,4 +528,5 @@ void loop()
 {
   sendControl();
   updateBatteryDisplay();
+  debugPrint();
 }

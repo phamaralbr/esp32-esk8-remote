@@ -8,13 +8,12 @@
 #include <packets.h>
 
 // ---------- PIN CONFIG ----------
-#define PPM_PIN 6
-#define BAT_PIN 2
+#define PPM_PIN 5
+#define BAT_PIN 4
 
 // ---------- TIMING ----------
 #define RADIO_TIMEOUT_MS 200
 #define TELEMETRY_INTERVAL_MS 200
-#define PAIR_WINDOW_MS 1000
 
 // ---------- THROTTLE RANGE ----------
 #define THROTTLE_MIN -1000
@@ -35,12 +34,9 @@
 Servo ppm;
 Preferences prefs;
 
-uint8_t remoteAddress[6];
-bool paired = false;
+uint8_t remoteAddress[] = {0xE0, 0x72, 0xA1, 0x6C, 0x13, 0x58};
 
 unsigned long lastPacketTime = 0;
-
-bool controlMode = false;
 
 int16_t throttle = 0;
 
@@ -52,92 +48,13 @@ float readBattery()
     return voltage * VOLTAGE_DIVIDER_RATIO;
 }
 
-// ---------- SAVE REMOTE ----------
-void saveRemote(uint8_t *mac)
-{
-    prefs.begin("pair", false);
-    prefs.putBytes("remote", mac, 6);
-    prefs.end();
-}
-
-// ---------- LOAD REMOTE ----------
-bool loadRemote()
-{
-    prefs.begin("pair", true);
-
-    if (prefs.isKey("remote"))
-    {
-        prefs.getBytes("remote", remoteAddress, 6);
-        prefs.end();
-        return true;
-    }
-
-    prefs.end();
-    return false;
-}
-
-// ---------- SEND PAIR OK ----------
-void sendPairOK(uint8_t *mac)
-{
-    PairPacket pkt;
-    pkt.magic = PAIR_MAGIC;
-    pkt.type = PACKET_PAIR_OK;
-
-    esp_now_send(mac, (uint8_t *)&pkt, sizeof(pkt));
-}
-
-// ---------- SWITCH TO CONTROL MODE ----------
-void enableControlMode()
-{
-    if (controlMode)
-        return;
-
-    controlMode = true;
-
-    esp_now_peer_info_t peer = {};
-    memcpy(peer.peer_addr, remoteAddress, 6);
-    peer.channel = 0;
-    peer.encrypt = false;
-
-    esp_now_add_peer(&peer);
-
-    Serial.println("Control mode active");
-}
-
-// ---------- UNIFIED RECEIVE CALLBACK ----------
+// ---------- RECEIVE CALLBACK ----------
 void onReceive(const uint8_t *mac, const uint8_t *data, int len)
 {
-    // ---------- PAIR ----------
-    if (len == sizeof(PairPacket) && !controlMode)
-    {
-
-        PairPacket pkt;
-        memcpy(&pkt, data, sizeof(pkt));
-
-        if (pkt.magic == PAIR_MAGIC && pkt.type == PACKET_PAIR_REQUEST)
-        {
-            memcpy(remoteAddress, mac, 6);
-
-            saveRemote(remoteAddress);
-            paired = true;
-
-            sendPairOK(remoteAddress);
-
-            Serial.println("Remote paired");
-
-            enableControlMode();
-        }
-
-        return;
-    }
-
+    Serial.print("Received packet");
     // ---------- CONTROL ----------
-    if (len == sizeof(ControlPacket) && controlMode)
+    if (len == sizeof(ControlPacket)) //&& memcmp(mac, remoteAddress, 6) == 0)
     {
-
-        if (memcmp(mac, remoteAddress, 6) != 0)
-            return;
-
         ControlPacket packet;
         memcpy(&packet, data, sizeof(packet));
 
@@ -148,28 +65,48 @@ void onReceive(const uint8_t *mac, const uint8_t *data, int len)
     }
 }
 
+void onSend(const uint8_t *mac, esp_now_send_status_t status)
+{
+    Serial.print("Send status: ");
+    Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
+}
+
 // ---------- RADIO SETUP ----------
+
 void setupRadio()
 {
     WiFi.mode(WIFI_STA);
+    WiFi.disconnect(true, true);
     esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
 
     if (esp_now_init() != ESP_OK)
     {
-        Serial.println("ESP-NOW init failed");
+        Serial.println("Error initializing ESP-NOW");
         return;
     }
 
+    // Register the Remote as a peer (so we can send telemetry back)
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, remoteAddress, 6);
+    peerInfo.channel = ESPNOW_CHANNEL;
+    peerInfo.encrypt = false;
+
+    esp_err_t addStatus = esp_now_add_peer(&peerInfo);
+
+    Serial.print("Add peer status: ");
+    Serial.println(addStatus);
+
+    if (addStatus != ESP_OK)
+    {
+        Serial.println("Failed to add peer");
+        return;
+    }
+
+    // Register callback to receive throttle packets
     esp_now_register_recv_cb(onReceive);
+    esp_now_register_send_cb(onSend);
 
-    Serial.println("Pair window open...");
-
-    unsigned long start = millis();
-    while (millis() - start < PAIR_WINDOW_MS)
-        delay(10);
-
-    if (paired)
-        enableControlMode();
+    Serial.println("Receiver Radio Ready - Linked to Remote");
 }
 
 // ---------- PPM SETUP ----------
@@ -182,9 +119,6 @@ void setupPPM()
 // ---------- SEND TELEMETRY ----------
 void sendTelemetry()
 {
-    if (!controlMode)
-        return;
-
     static unsigned long lastSend = 0;
     unsigned long now = millis();
 
@@ -195,7 +129,10 @@ void sendTelemetry()
         TelemetryPacket packet;
         packet.skateBat = readBattery() * 100;
 
-        esp_now_send(remoteAddress, (uint8_t *)&packet, sizeof(packet));
+        esp_err_t result = esp_now_send(remoteAddress, (uint8_t *)&packet, sizeof(packet));
+
+        Serial.print("Send call result: ");
+        Serial.println(result);
     }
 }
 
@@ -212,16 +149,37 @@ void updatePPM()
     ppm.writeMicroseconds(constrain(ppmValue, PPM_MIN, PPM_MAX));
 }
 
+void logData()
+{
+    int ppmValue = map(throttle, THROTTLE_MIN, THROTTLE_MAX, PPM_MIN, PPM_MAX);
+
+    Serial.print("thr=");
+    Serial.print(throttle);
+
+    Serial.print(" | ppm=");
+    Serial.print(ppmValue);
+
+    Serial.print(" | lastPacket age=");
+    Serial.print(millis() - lastPacketTime);
+    Serial.print("ms");
+
+    Serial.print(" | bat=");
+    Serial.print(readBattery(), 2);
+    Serial.print("V");
+
+    Serial.println();
+}
+
 // ---------- SETUP ----------
 void setup()
 {
     Serial.begin(115200);
+    delay(5000);
+    Serial.println("Receiver Starting...");
 
     pinMode(BAT_PIN, INPUT);
 
     setupPPM();
-
-    paired = loadRemote();
 
     setupRadio();
 }
@@ -231,4 +189,5 @@ void loop()
 {
     updatePPM();
     sendTelemetry();
+    // logData();
 }
