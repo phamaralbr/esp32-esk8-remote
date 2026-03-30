@@ -47,6 +47,7 @@ unsigned long lastSend = 0;
 float skateBattery = 0;
 uint8_t receiverAddress[] = {0xE0, 0x72, 0xA1, 0x68, 0xCF, 0x2C};
 unsigned long lastPacketTime = 0;
+esp_now_peer_info_t peerInfo = {};
 
 // ---------- STORAGE ----------
 Preferences prefs;
@@ -117,15 +118,20 @@ void saveCalibration()
   prefs.end();
 }
 
-// ---------- UNIFIED RECEIVE ----------
+// // ---------- UNIFIED RECEIVE ----------
 void onReceive(const uint8_t *mac, const uint8_t *data, int len)
 {
-  Serial.print("Received packet");
+
   if (len == sizeof(TelemetryPacket))
   {
 
     // if (memcmp(mac, receiverAddress, 6) != 0)
     //   return;
+
+    // Serial.println("Received telemetry");
+    // setAll(0, 0, 255); // Blue on receive
+    // delay(100);
+    // setAll(0, 0, 0);
 
     TelemetryPacket packet;
     memcpy(&packet, data, sizeof(packet));
@@ -137,42 +143,63 @@ void onReceive(const uint8_t *mac, const uint8_t *data, int len)
   }
 }
 
-// ---------- RADIO ----------
+void onSend(const uint8_t *mac, esp_now_send_status_t status)
+{
+  // Serial.print("Send status: ");
+  // Serial.println(status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL");
+}
+
+// // ---------- RADIO ----------
 
 void setupRadio()
 {
+  // Set device as a Wi-Fi Station
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true, true);
-  // This forces the ESP32 to stay on Channel 1
-  esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  WiFi.disconnect();
+  esp_wifi_set_max_tx_power(34);
+  esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
 
+  // Init ESP-NOW
   if (esp_now_init() != ESP_OK)
   {
     Serial.println("Error initializing ESP-NOW");
     return;
   }
 
-  // Register the Receiver as a peer
-  esp_now_peer_info_t peerInfo = {};
-  memcpy(peerInfo.peer_addr, receiverAddress, 6);
-  peerInfo.channel = ESPNOW_CHANNEL;
-  peerInfo.encrypt = false;
+  // Once ESPNow is successfully Init, we will register for Send CB to get the status of Trasnmitted packet
+  esp_now_register_send_cb(onSend);
 
+  // Register peer
+  memcpy(peerInfo.peer_addr, receiverAddress, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+  // peerInfo.ifidx = WIFI_IF_STA;
+
+  // Add peer
   if (esp_now_add_peer(&peerInfo) != ESP_OK)
   {
     Serial.println("Failed to add peer");
     return;
   }
 
+  // Register for a callback function that will be called when data is received
   esp_now_register_recv_cb(onReceive);
-
-  Serial.println("Remote Radio Ready - Linked to Receiver");
 }
 
 // ---------- THROTTLE ----------
 int16_t readThrottle()
 {
-  int raw = analogRead(THROTTLE_PIN);
+  // unsigned long start = millis();
+
+  int sum = 0;
+  for (int i = 0; i < 100; i++)
+  {
+    sum += analogRead(THROTTLE_PIN);
+  }
+  int raw = sum / 100;
+
+  // Serial.print("Read delay: ");
+  // Serial.println(millis() - start);
 
   raw = constrain(raw, throttleMin, throttleMax);
 
@@ -194,7 +221,16 @@ void sendControl()
 
   ControlPacket packet;
   packet.throttle = !digitalRead(DEADMAN_PIN) ? readThrottle() : 0;
-  esp_now_send(receiverAddress, (uint8_t *)&packet, sizeof(packet));
+
+  esp_err_t result = esp_now_send(receiverAddress, (uint8_t *)&packet, sizeof(packet));
+  // if (result == ESP_OK)
+  // {
+  //   Serial.println("Sent with success");
+  // }
+  // else
+  // {
+  //   Serial.println("Error sending the data");
+  // }
 }
 
 // ---------- SKATE BATTERY DISPLAY ----------
@@ -205,38 +241,22 @@ void drawSkateBattery()
     float percent = (skateBattery - SKATE_MIN_V) / (SKATE_MAX_V - SKATE_MIN_V);
     percent = constrain(percent, 0.0, 1.0);
 
-    // Using 5.0 for float math accuracy
-    int ledsOn = round(percent * 5.0);
+    int bars = percent * 5; // 0 a 5
 
     for (int i = 0; i < 5; i++)
     {
-      if (i < ledsOn)
-      {
-        // Calculate Red/Green mix based on battery level
-        // Dividing by 10 to keep brightness manageable (e.g., 25 max)
-        uint8_t r = (255 * (1.0 - percent)) / 10;
-        uint8_t g = (255 * percent) / 10;
-
-        leds.setPixelColor(i, leds.Color(r, g, 0));
-      }
+      if (i < bars)
+        leds.setPixelColor(4 - i, leds.Color(10, 10 * percent, 0)); // 4 → 0
       else
-      {
-        leds.setPixelColor(i, 0); // Turn off unused battery LEDs
-      }
+        leds.setPixelColor(4 - i, 0);
     }
   }
   else
   {
-    // SIGNAL LOST: Clear these specific LEDs (0-4)
+    // perdeu sinal → apaga LEDs 0–4
     for (int i = 0; i < 5; i++)
     {
       leds.setPixelColor(i, 0);
-    }
-
-    // Blink LED 0 Red to show "Disconnected"
-    if ((millis() / 500) % 2)
-    {
-      leds.setPixelColor(0, leds.Color(10, 0, 0));
     }
   }
 }
@@ -528,5 +548,5 @@ void loop()
 {
   sendControl();
   updateBatteryDisplay();
-  debugPrint();
+  // debugPrint();
 }
