@@ -1,6 +1,6 @@
 # ESP32 Skateboard Remote Firmware
 
-This firmware implements an ESP-NOW based wireless remote for an electric skateboard. It supports **throttle control**, **deadman switch**, **battery monitoring**, **throttle calibration**, and **pairing**.
+This firmware implements an ESP-NOW based wireless remote for an electric skateboard. It supports **throttle control**, **deadman switch**, **battery monitoring** and **throttle calibration**.
 
 ---
 
@@ -10,8 +10,6 @@ This firmware implements an ESP-NOW based wireless remote for an electric skateb
 - Throttle control with deadman switch
 - Skateboard and remote battery display via NeoPixel LEDs
 - Throttle calibration mode
-- Pairing mode
-- Persistent storage of calibration and paired receiver address
 
 ---
 
@@ -32,6 +30,7 @@ Both devices communicate wirelessly using **ESP-NOW**.
 - **49E Hall effect sensor** (throttle position sensing)
 - **2× 5 mm neodymium magnets** (for hall throttle mechanism)
 - **Pen spring** (for throttle return mechanism)
+- **8x16x5 bearing**
 - **TP4056 charging module** (Li-ion charging and protection)
 - **18650 Li-ion battery**
 - **10T85 limit switch** (deadman switch)
@@ -42,52 +41,33 @@ Both devices communicate wirelessly using **ESP-NOW**.
 
 ---
 
-## Boot Modes
-
-Hold the deadman switch and **throttle fully forward or backward** during power-on for to enter special modes. LEDs will light up to indicate which mode it's entering:
-
-| Throttle          | Mode                 | LEDs   |
-| ----------------- | -------------------- | ------ |
-| > `Full Throttle` | **Calibration Mode** | Blue   |
-| < `Full Brake`    | **Pairing Mode**     | Purple |
-
-After holding buttons for 5 seconds, the LEDs will become white. Let go of the inputs to confirm and enter the selected mode.
-
----
-
-## Modes & Instructions
-
-### 1. Calibration Mode
+### Calibration Mode
 
 Calibration allows adjusting throttle min, max, and center for better precision.
 
-1. Follow LED prompts:
-    - **Red:** Hold throttle on **minimum**.
-    - **Green:** Hold throttle on **maximum**.
-    - **Yellow:** Release throttle to **center/neutral**.
-2. **Green fast blink** indicates calibration complete.
-3. Firmware saves the calibration to non-volatile memory.
+#### Entering Calibration Mode
 
----
+1. Hold the Deadman Switch and Power ON the remote.
+2. Keep holding the switch for 8 seconds. LEDs will fill up with White.
+3. When LEDs pulse Red, RELEASE the Deadman switch within 1 second.
+4. When LEDs pulse White, PRESS the Deadman switch again.
 
-### 2. Pairing Mode
+LEDs will turn Green. You are now in Calibration Mode.
 
-Pairing binds the remote to a new receiver.
+#### Calibration Steps
 
-1. The remote continuously sends **pairing requests** until the receiver responds.
-2. Power cycle the reciever. It listens for a remote for 1 second after power up.
-3. Upon successful pairing:
-    - LED blinks **Red 3 times**
-    - Remote stores receiver address in non-volatile memory.
-4. Once paired, the remote enters **Normal Mode** automatically.
-5. Remote stays in pairing mode until either successfully paired or powered off.
+Range Sampling: A Blue "Ping-Pong" animation plays. Move the throttle stick/trigger through its full range multiple times.
+
+Center Finding: A Yellow animation plays. Release the throttle to its natural neutral position and keep it still for 1 second.
+
+Success: LEDs blink Green 5 times. Your values are saved.
 
 ---
 
 ## LED Battery Indicators
 
 - **Skateboard Battery (LEDs 0–4)**
-    - Red → Green gradient and number of LEDs lit corresponds to battery level.
+    - Yellow → Red gradient and number of LEDs lit corresponds to battery level.
 
 - **Remote Battery (LED 6)**
     - Red blinking if below `REMOTE_CRITICAL_V`
