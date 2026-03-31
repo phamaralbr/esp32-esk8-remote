@@ -21,7 +21,7 @@ Adafruit_NeoPixel leds(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 #define SEND_INTERVAL_MS 20
 #define MODE_HOLD_TIME_MS 5000
 #define MODE_CONFIRM_TIME_MS 1500
-#define RADIO_TIMEOUT_MS 200
+#define RADIO_TIMEOUT_MS 400
 
 // ---------- ADC ----------
 #define ADC_REF_VOLTAGE 3.3
@@ -116,6 +116,179 @@ void saveCalibration()
   prefs.putInt("center", throttleCenter);
 
   prefs.end();
+}
+
+bool waitDeadmanHold()
+{
+  while (!digitalRead(DEADMAN_PIN))
+  {
+    delay(5);
+  }
+  return true;
+}
+
+void waitDeadmanRelease()
+{
+  while (digitalRead(DEADMAN_PIN))
+  {
+    delay(5);
+  }
+}
+
+bool calibrateMax()
+{
+  // idle animation
+  while (!digitalRead(DEADMAN_PIN))
+  {
+    int step = (millis() / 120) % 5;
+    for (int i = 0; i < 5; i++)
+      leds.setPixelColor(i, (i == (4 - step)) ? leds.Color(0, 0, 30) : 0);
+    leds.show();
+  }
+
+  int minVal = 4095;
+  unsigned long start = millis();
+
+  while (millis() - start < 5000)
+  {
+    if (!digitalRead(DEADMAN_PIN))
+      return false; // abort
+
+    int step = (millis() / 120) % 5;
+    for (int i = 0; i < 5; i++)
+      leds.setPixelColor(i, (i == (4 - step)) ? leds.Color(50, 0, 50) : 0);
+    leds.show();
+
+    int v = analogRead(THROTTLE_PIN);
+    if (v < minVal)
+      minVal = v;
+  }
+
+  throttleMax = minVal;
+  blink(0, 20, 0, 3, 120);
+  return true;
+}
+
+bool calibrateMin()
+{
+  while (!digitalRead(DEADMAN_PIN))
+  {
+    int step = (millis() / 120) % 5;
+    for (int i = 0; i < 5; i++)
+      leds.setPixelColor(i, (i == step) ? leds.Color(0, 0, 30) : 0);
+    leds.show();
+  }
+
+  int maxVal = 0;
+  unsigned long start = millis();
+
+  while (millis() - start < 5000)
+  {
+    if (!digitalRead(DEADMAN_PIN))
+      return false;
+
+    int step = (millis() / 120) % 5;
+    for (int i = 0; i < 5; i++)
+      leds.setPixelColor(i, (i == step) ? leds.Color(50, 0, 50) : 0);
+    leds.show();
+
+    int v = analogRead(THROTTLE_PIN);
+    if (v > maxVal)
+      maxVal = v;
+  }
+
+  throttleMin = maxVal;
+  blink(0, 20, 0, 3, 120);
+  return true;
+}
+
+bool calibrateCenter()
+{
+  while (!digitalRead(DEADMAN_PIN))
+  {
+    int step = (millis() / 150) % 3;
+    for (int i = 0; i < 5; i++)
+    {
+      bool on = (i == step || i == (4 - step));
+      leds.setPixelColor(i, on ? leds.Color(20, 20, 0) : 0);
+    }
+    leds.show();
+  }
+
+  long sum = 0;
+  int count = 0;
+  unsigned long start = millis();
+
+  while (millis() - start < 5000)
+  {
+    if (!digitalRead(DEADMAN_PIN))
+      return false;
+
+    int step = (millis() / 150) % 3;
+    for (int i = 0; i < 5; i++)
+    {
+      bool on = (i == step || i == (4 - step));
+      leds.setPixelColor(i, on ? leds.Color(50, 50, 0) : 0);
+    }
+    leds.show();
+
+    sum += analogRead(THROTTLE_PIN);
+    count++;
+  }
+
+  throttleCenter = sum / count;
+  blink(0, 20, 0, 3, 120);
+  return true;
+}
+
+void calibrateThrottle()
+{
+  if (!calibrateMax())
+  {
+    blink(20, 0, 0, 5, 150);
+    return;
+  }
+
+  waitDeadmanRelease();
+  delay(200);
+
+  if (!calibrateMin())
+  {
+    blink(20, 0, 0, 5, 150);
+    return;
+  }
+
+  waitDeadmanRelease();
+  delay(200);
+
+  if (!calibrateCenter())
+  {
+    blink(20, 0, 0, 5, 150);
+    return;
+  }
+
+  waitDeadmanRelease(); // optional final release
+
+  // --- VALIDATION ---
+  if (throttleMin >= throttleCenter || throttleCenter >= throttleMax)
+  {
+    blink(20, 0, 0, 5, 200);
+    return;
+  }
+
+  if ((throttleMax - throttleMin) < 300)
+  {
+    blink(20, 0, 0, 5, 200);
+    return;
+  }
+
+  // --- NOISE MARGIN ---
+  // throttleMax += (throttleCenter - throttleMax) * 0.05;
+  // throttleMin -= (throttleMin - throttleCenter) * 0.05;
+
+  saveCalibration();
+
+  blink(0, 20, 0, 10, 100);
 }
 
 // // ---------- UNIFIED RECEIVE ----------
@@ -302,98 +475,6 @@ void updateBatteryDisplay()
   leds.show();
 }
 
-// ---------- CALIBRATION ----------
-void calibrateThrottle()
-{
-
-  int minVal = 4095;
-  int maxVal = 0;
-
-  unsigned long start = millis();
-
-  // --- SAMPLE FOR 8 SECONDS ---
-  while (millis() - start < 8000)
-  {
-    // --- PING-PONG ANIMATION ---
-    int activeLed = abs(((int)(millis() / 150) % 8) - 4);
-
-    for (int i = 0; i < 5; i++)
-    {
-      leds.setPixelColor(i, (i == activeLed) ? leds.Color(0, 0, 100) : 0);
-    }
-    leds.show();
-
-    // --- SAMPLING ---
-    int v = analogRead(THROTTLE_PIN);
-    if (v < minVal)
-      minVal = v;
-    if (v > maxVal)
-      maxVal = v;
-
-    delay(5);
-  }
-
-  // --- WAIT FOR RELEASE (CENTER) ---
-
-  int last = analogRead(THROTTLE_PIN);
-  unsigned long stableStart = millis();
-
-  while (true)
-  {
-    // --- ANIMATION: Meet at Center (0,1,2 and 4,3,2) ---
-    int step = (millis() / 200) % 3; // 0, 1, 2... repeat
-
-    for (int i = 0; i < 5; i++)
-    {
-      // Light up i if it matches the current step OR the mirrored step
-      bool isMatch = (i == step || i == (4 - step));
-      leds.setPixelColor(i, isMatch ? leds.Color(10, 10, 0) : 0);
-    }
-    leds.show();
-
-    // --- STABILITY CHECK ---
-    int v = analogRead(THROTTLE_PIN);
-    if (abs(v - last) > 10)
-    {
-      stableStart = millis();
-      last = v;
-    }
-
-    if (millis() - stableStart > 1000)
-    {
-      throttleCenter = v;
-      break;
-    }
-    delay(10);
-  }
-
-  // throttleMin = minVal;
-  // throttleMax = maxVal;
-
-  // Pull the Max down by 10% of the upper travel
-  throttleMax = throttleCenter + (int)((maxVal - throttleCenter) * 0.9);
-
-  // Pull the Min up by 10% of the lower travel
-  throttleMin = throttleCenter - (int)((throttleCenter - minVal) * 0.9);
-
-  // --- VALIDATION ---
-  if (throttleMin >= throttleCenter || throttleCenter >= throttleMax)
-  {
-    blink(10, 0, 0, 5, 200); // error
-    return;
-  }
-
-  if ((throttleMax - throttleMin) < 300)
-  {
-    blink(10, 0, 0, 5, 200); // error
-    return;
-  }
-
-  saveCalibration();
-
-  blink(0, 10, 0, 5, 200); // success
-}
-
 // ---------- BOOT MODE CHECK ----------
 void checkBootMode()
 {
@@ -487,7 +568,15 @@ void checkBootMode()
   for (int i = 0; i < 5; i++)
     leds.setPixelColor(i, leds.Color(0, 10, 0));
   leds.show();
-  delay(1000);
+
+  while (digitalRead(DEADMAN_PIN))
+  {
+    delay(10);
+  }
+
+  for (int i = 0; i < 5; i++)
+    leds.setPixelColor(i, leds.Color(0, 0, 0));
+  leds.show();
 
   calibrateThrottle();
 }
