@@ -329,7 +329,8 @@ void setupRadio()
   // Set device as a Wi-Fi Station
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
-  esp_wifi_set_max_tx_power(34);
+  // esp_wifi_set_max_tx_power(34); //8.5dbm
+  // esp_wifi_set_max_tx_power(44); // 11dbm
   esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
 
   // Init ESP-NOW
