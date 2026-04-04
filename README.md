@@ -1,10 +1,10 @@
-# ESP32 Skateboard Remote Firmware
+## ESP32 Skateboard Remote Firmware
 
 This firmware implements an ESP-NOW based wireless remote for an electric skateboard. It supports **throttle control**, **deadman switch**, **battery monitoring** and **throttle calibration**.
 
 ---
 
-## Features
+### Features
 
 - ESP-NOW wireless communication
 - Throttle control with deadman switch
@@ -13,7 +13,7 @@ This firmware implements an ESP-NOW based wireless remote for an electric skateb
 
 ---
 
-## Hardware
+### Hardware
 
 The system consists of two devices:
 
@@ -24,11 +24,11 @@ Both devices communicate wirelessly using **ESP-NOW**.
 
 ---
 
-## Required Components
+### Required Components
 
 - **2× ESP32-C3 SuperMini** microcontrollers (remote + receiver)
 - **49E Hall effect sensor** (throttle position sensing)
-- **2× 5 mm neodymium magnets** (for hall throttle mechanism)
+- **2× 5 mm neodymium magnets** (should oppose each other in the wheel)
 - **Pen spring** (for throttle return mechanism)
 - **8x16x5 bearing**
 - **TP4056 charging module** (Li-ion charging and protection)
@@ -38,6 +38,14 @@ Both devices communicate wirelessly using **ESP-NOW**.
 - **KCD11 power switch**
 - **Resistors for battery voltage divider**
 - **4× M3 × 15 mm button head screws**
+- [3D Printed parts](https://www.printables.com/model/1656323-esk8-remote-esp32-c3) (available on printables)
+
+#### Antenna Fix
+
+A lot of ESP32 C3 Mini models have connectivity problems due to antenna placement. They place it too close to other components, which kills signal. Rotating it helps get it away from that interference.
+
+Unsolder the antenna, rotate it 90°, and solder it back like in the picture:
+![ESP32 C3 Supermini antenna fix](images/ESP32%20C3%20Supermini%20antenna%20fix.png)
 
 ---
 
@@ -45,26 +53,32 @@ Both devices communicate wirelessly using **ESP-NOW**.
 
 Calibration allows adjusting throttle min, max, and center for better precision.
 
-#### Entering Calibration Mode
+1. **Enter calibration mode**
+    - Hold deadman while powering on (~8s)
+    - Release when LEDs turn red
 
-1. Hold the Deadman Switch and Power ON the remote.
-2. Keep holding the switch for 8 seconds. LEDs will fill up with White.
-3. When LEDs pulse Red, RELEASE the Deadman switch within 1 second.
-4. When LEDs pulse White, PRESS the Deadman switch again.
+2. **Start**
+    - Wait (LEDs off)
+    - Press and hold deadman when LEDs turn white
 
-LEDs will turn Green. You are now in Calibration Mode.
+3. **Max (forward)**
+    - Hold full throttle forward and then let go of deadman (~5s)
+    - Release throttle when LEDs blink green
 
-#### Calibration Steps
+4. **Min (brake)**
+    - Hold full throttle back (~5s)
+    - Press and release deadman
+    - Release throttle when LEDs blink green
 
-Range Sampling: A Blue "Ping-Pong" animation plays. Move the throttle stick/trigger through its full range multiple times.
-
-Center Finding: A Yellow animation plays. Release the throttle to its natural neutral position and keep it still for 1 second.
-
-Success: LEDs blink Green 5 times. Your values are saved.
+5. **Center**
+    - Leave throttle centered (~5s)
+    - Press and release deadman
+    - Wait for confirmation
+    - Press and release deadman
 
 ---
 
-## LED Battery Indicators
+### LED Battery Indicators
 
 - **Skateboard Battery (LEDs 0–4)**
     - Yellow → Red gradient and number of LEDs lit corresponds to battery level.
@@ -72,3 +86,45 @@ Success: LEDs blink Green 5 times. Your values are saved.
 - **Remote Battery (LED 6)**
     - Red blinking if below `REMOTE_CRITICAL_V`
     - Gradient from Red → Green indicates charge
+
+---
+
+### Wiring
+
+#### Remote
+
+**Charging Module (TP4056)**
+B+ → Battery +
+B- → Battery -
+OUT+ → Power Switch → 5V
+OUT- → GND
+
+**Hall Sensor (Throttle)**
+VCC → 3.3V
+GND → GND
+OUT → GPIO1 (THROTTLE_PIN)
+
+**Deadman Switch**
+GND → GND
+NO → GPIO3 (DEADMAN_PIN)
+
+**Remote Battery Voltage Divider**
+5V → [R1] → GPIO2 (REMOTE_BAT_PIN) → [R2] → GND
+
+(Example: R1 = 10k, R2 = 10k → ÷2)
+
+**LED Module (WS2812)**
+DIN → GPIO4 (LED_PIN)
+VCC → 5V
+GND → GND
+
+### Receiver
+
+GPIO1 (PPM_PIN) → PPM Signal
+GND → ESC GND
+5V -> ESC 5V
+
+Battery Voltage Divider
+Battery + → [R1] → GPIO0 (BAT_PIN) → [R2] → GND
+
+(Example: R1 = 150k, R2 = 10k → ÷16)
