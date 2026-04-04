@@ -1,6 +1,8 @@
-## ESP32 Skateboard Remote Firmware
+## ESP32 Skateboard Remote
 
 This firmware implements an ESP-NOW based wireless remote for an electric skateboard. It supports **throttle control**, **deadman switch**, **battery monitoring** and **throttle calibration**.
+
+![Remote](images/remote.png)
 
 ---
 
