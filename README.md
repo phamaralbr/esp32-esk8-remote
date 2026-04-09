@@ -96,37 +96,46 @@ Calibration allows adjusting throttle min, max, and center for better precision.
 #### Remote
 
 **Charging Module (TP4056)**
-B+ → Battery +
-B- → Battery -
-OUT+ → Power Switch → 5V
-OUT- → GND
+
+    B+ → Battery +
+    B- → Battery -
+    OUT+ → Power Switch → 5V
+    OUT- → GND
 
 **Hall Sensor (Throttle)**
-VCC → 3.3V
-GND → GND
-OUT → GPIO1 (THROTTLE_PIN)
+
+    VCC → 3.3V
+    GND → GND
+    OUT → GPIO1 (THROTTLE_PIN)
 
 **Deadman Switch**
-GND → GND
-NO → GPIO3 (DEADMAN_PIN)
+
+    GND → GND
+    NO → GPIO3 (DEADMAN_PIN)
 
 **Remote Battery Voltage Divider**
-5V → [R1] → GPIO2 (REMOTE_BAT_PIN) → [R2] → GND
 
-(Example: R1 = 10k, R2 = 10k → ÷2)
+    5V → [R1] → GPIO2 (REMOTE_BAT_PIN) → [R2] → GND
+
+    (Example: R1 = 10k, R2 = 10k → ÷2)
 
 **LED Module (WS2812)**
-DIN → GPIO4 (LED_PIN)
-VCC → 5V
-GND → GND
+
+    DIN → GPIO4 (LED_PIN)
+    VCC → 5V
+    GND → GND
+
+![Remote Diagram](images/remote-diagram.png)
 
 ### Receiver
 
-GPIO1 (PPM_PIN) → PPM Signal
-GND → ESC GND
-5V -> ESC 5V
+    GPIO1 (PPM_PIN) → PPM Signal
+    GND → ESC GND
+    5V -> ESC 5V
 
-Battery Voltage Divider
-Battery + → [R1] → GPIO0 (BAT_PIN) → [R2] → GND
+**Battery Voltage Divider**
 
-(Example: R1 = 150k, R2 = 10k → ÷16)
+    Battery + → [R1] → GPIO0 (BAT_PIN) → [R2] → GND
+    (Example: R1 = 150k, R2 = 10k → ÷16)
+
+![Receiver Diagram](images/receiver-diagram.png)
