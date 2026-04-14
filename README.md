@@ -35,7 +35,7 @@ Both devices communicate wirelessly using **ESP-NOW**.
 - **8x16x5 bearing**
 - **TP4056 charging module** (Li-ion charging and protection)
 - **18650 Li-ion battery**
-- **10T85 limit switch** (deadman switch)
+- **KW11-3Z Roller lever micro switch** (deadman switch)
 - **8-LED WS2812 / NeoPixel module** (status and battery indicators)
 - **KCD11 power switch**
 - **Resistors for battery voltage divider**
